@@ -84,12 +84,13 @@ public class HTTPSink extends AbstractSink<Record<Event>> {
             this.bufferFactory = new InMemoryBufferFactory();
         }
 
-        this.dlqPushHandler = new DlqPushHandler(httpSinkConfiguration.getDlqFile(), pluginFactory,
-                String.valueOf(httpSinkConfiguration.getDlqPluginSetting().get(BUCKET)),
-                httpSinkConfiguration.getDlqStsRoleARN()
-                ,httpSinkConfiguration.getDlqStsRegion(),
-                String.valueOf(httpSinkConfiguration.getDlqPluginSetting().get(KEY_PATH)));
-
+        if (httpSinkConfiguration.getDlq() != null) {
+          this.dlqPushHandler = new DlqPushHandler(httpSinkConfiguration.getDlqFile(), pluginFactory,
+              String.valueOf(httpSinkConfiguration.getDlqPluginSetting().get(BUCKET)),
+              httpSinkConfiguration.getDlqStsRoleARN()
+              ,httpSinkConfiguration.getDlqStsRegion(),
+              String.valueOf(httpSinkConfiguration.getDlqPluginSetting().get(KEY_PATH)));
+        }
         final HttpRequestRetryStrategy httpRequestRetryStrategy = new DefaultHttpRequestRetryStrategy(httpSinkConfiguration.getMaxUploadRetries(),
                 TimeValue.of(httpSinkConfiguration.getHttpRetryInterval()));
         if((!httpSinkConfiguration.isInsecure()) && (httpSinkConfiguration.isHttpUrl())){
@@ -103,9 +104,9 @@ public class HTTPSink extends AbstractSink<Record<Event>> {
             this.webhookService = new WebhookService(httpSinkConfiguration.getWebhookURL(),
                     httpClientBuilder,pluginMetrics,httpSinkConfiguration);
 
-        if(httpSinkConfiguration.isAwsSigv4() && httpSinkConfiguration.isValidAWSUrl()){
-            HttpSinkAwsService.attachSigV4(httpSinkConfiguration, httpClientBuilder, awsCredentialsSupplier);
-        }
+//        if(httpSinkConfiguration.isAwsSigv4() && httpSinkConfiguration.isValidAWSUrl()){
+//            HttpSinkAwsService.attachSigV4(httpSinkConfiguration, httpClientBuilder, awsCredentialsSupplier);
+//        }
         this.codec = pluginFactory.loadPlugin(OutputCodec.class, codecPluginSettings);
         this.httpSinkService = new HttpSinkService(
                 httpSinkConfiguration,
@@ -154,4 +155,13 @@ public class HTTPSink extends AbstractSink<Record<Event>> {
         }
         httpSinkService.output(records);
     }
+
+    @Override
+    public void shutdown() {
+      super.shutdown();
+      httpSinkService.shutdown();
+    }
+
+
+
 }

@@ -9,6 +9,7 @@ import org.apache.hc.core5.http.HttpResponse;
 import org.apache.hc.core5.http.protocol.HttpContext;
 import org.junit.jupiter.api.Test;
 import java.io.IOException;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
@@ -27,7 +28,7 @@ public class FailedHttpResponseInterceptorTest {
     @Test
     public void test_process(){
         httpResponse = mock(HttpResponse.class);
-        failedHttpResponseInterceptor = new FailedHttpResponseInterceptor("http://localhost:8080");
+        failedHttpResponseInterceptor = new FailedHttpResponseInterceptor( List.of(501), "http://localhost:8080");
         when(httpResponse.getCode()).thenReturn(501);
         assertThrows(IOException.class, () -> failedHttpResponseInterceptor.process(httpResponse, entityDetails, httpContext));
     }

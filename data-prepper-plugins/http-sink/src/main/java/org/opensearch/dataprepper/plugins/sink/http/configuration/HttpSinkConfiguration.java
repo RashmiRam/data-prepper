@@ -5,11 +5,13 @@
 package org.opensearch.dataprepper.plugins.sink.http.configuration;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.netty.handler.codec.compression.CompressionOptions;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import org.apache.commons.lang3.StringUtils;
 import org.opensearch.dataprepper.model.configuration.PluginModel;
 import org.opensearch.dataprepper.plugins.accumulator.BufferTypeOptions;
+import org.opensearch.dataprepper.plugins.codec.CompressionOption;
 import org.opensearch.dataprepper.plugins.sink.http.util.HttpSinkUtil;
 
 import java.net.URL;
@@ -43,6 +45,18 @@ public class HttpSinkConfiguration {
 
     public static final Duration DEFAULT_HTTP_RETRY_INTERVAL = Duration.ofSeconds(30);
 
+    private static final int DEFAULT_POOL_MAX_CONNECTIONS = 50;
+
+    private static final int DEFAULT_POOL_MAX_PER_ROUTE = 25;
+
+    private static final Duration DEFAULT_VALIDATE_AFTER_INACTIVITY = Duration.ofSeconds(200);
+
+    private static final boolean DEFAULT_KEEP_ALIVE = true;
+
+    private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(60);
+    private static final Duration DEFAULT_SOCKET_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(10);
+
     private static final String HTTPS = "https";
 
     private static final String HTTP = "http";
@@ -53,7 +67,8 @@ public class HttpSinkConfiguration {
 
     private static final String AWS_HOST_ON_AWS = "on.aws";
 
-    @NotNull
+
+  @NotNull
     @JsonProperty("url")
     private String url;
 
@@ -128,13 +143,32 @@ public class HttpSinkConfiguration {
     @JsonProperty("insecure_skip_verify")
     private boolean insecureSkipVerify = DEFAULT_INSECURE;
 
-    @JsonProperty("request_timout")
-    private Duration requestTimout;
-
     @JsonProperty("http_retry_interval")
     private Duration httpRetryInterval = DEFAULT_HTTP_RETRY_INTERVAL;
 
+    @JsonProperty("retryable_codes")
+    private List<Integer> retryableCodes = List.of(429, 500, 502, 503, 504, 404);
 
+    @JsonProperty("compression")
+    private boolean compression;
+
+    @JsonProperty("pool_max_connections")
+    private int poolMaxConnections = DEFAULT_POOL_MAX_CONNECTIONS;
+    @JsonProperty("pool_max_per_route")
+    private int poolMaxPerRoute = DEFAULT_POOL_MAX_PER_ROUTE;
+    @JsonProperty("validate_after_inactivity")
+    private Duration validateAfterInactivity = DEFAULT_VALIDATE_AFTER_INACTIVITY;
+
+    @JsonProperty("request_timeout")
+    private Duration requestTimeout = DEFAULT_REQUEST_TIMEOUT;
+
+    @JsonProperty("socket_timeout")
+    private Duration socketTimeout = DEFAULT_SOCKET_TIMEOUT;
+
+    @JsonProperty("connect_timeout")
+    private Duration connectTimeout = DEFAULT_CONNECT_TIMEOUT;
+    @JsonProperty
+    private boolean keepAlive = DEFAULT_KEEP_ALIVE;
     private boolean sslCertAndKeyFileInS3;
 
     public String getUrl() {
@@ -149,6 +183,13 @@ public class HttpSinkConfiguration {
         return httpRetryInterval;
     }
 
+    public List<Integer> getRetryableCodes() {
+    return retryableCodes;
+  }
+
+    public boolean isCompression() {
+        return compression;
+    }
     public String getAcmPrivateKeyPassword() {
         return acmPrivateKeyPassword;
     }
@@ -295,11 +336,35 @@ public class HttpSinkConfiguration {
         return insecure;
     }
 
-    public Duration getRequestTimout() {
-        return requestTimout;
+    public int getPoolMaxConnections() {
+      return poolMaxConnections;
     }
 
-    public boolean isHttpUrl() {
+    public int getPoolMaxPerRoute() {
+      return poolMaxPerRoute;
+    }
+
+    public Duration getValidateAfterInactivity() {
+      return validateAfterInactivity;
+    }
+
+    public Duration getRequestTimeout() {
+      return requestTimeout;
+    }
+
+    public Duration getSocketTimeout() {
+      return socketTimeout;
+    }
+
+    public Duration getConnectTimeout() {
+      return connectTimeout;
+    }
+
+    public boolean isKeepAlive() {
+      return keepAlive;
+    }
+
+  public boolean isHttpUrl() {
         URL parsedUrl = HttpSinkUtil.getURLByUrlString(url);
         return parsedUrl.getProtocol().equals(HTTP);
     }

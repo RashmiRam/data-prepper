@@ -5,14 +5,21 @@
 package org.opensearch.dataprepper.plugins.sink.http.service;
 
 import io.micrometer.core.instrument.Counter;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
 import org.apache.hc.client5.http.impl.classic.HttpClientBuilder;
 import org.apache.hc.client5.http.io.HttpClientConnectionManager;
 import org.apache.hc.client5.http.protocol.HttpClientContext;
+import org.apache.hc.core5.http.ConnectionReuseStrategy;
 import org.apache.hc.core5.http.ContentType;
+import org.apache.hc.core5.http.HttpHeaders;
 import org.apache.hc.core5.http.HttpStatus;
+import org.apache.hc.core5.http.impl.DefaultConnectionReuseStrategy;
 import org.apache.hc.core5.http.io.support.ClassicRequestBuilder;
 import org.apache.hc.core5.util.Timeout;
+import org.apache.http.impl.NoConnectionReuseStrategy;
 import org.opensearch.dataprepper.metrics.PluginMetrics;
 import org.opensearch.dataprepper.model.codec.OutputCodec;
 import org.opensearch.dataprepper.model.configuration.PluginSetting;
@@ -44,6 +51,7 @@ import org.opensearch.dataprepper.plugins.sink.http.util.HttpSinkUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 
@@ -114,6 +122,8 @@ public class HttpSinkService {
 
     private final OutputCodecContext codecContext;
 
+    private final CloseableHttpClient closeableHttpClient;
+
     public HttpSinkService(final HttpSinkConfiguration httpSinkConfiguration,
                            final BufferFactory bufferFactory,
                            final DlqPushHandler dlqPushHandler,
@@ -137,7 +147,8 @@ public class HttpSinkService {
         this.maxBytes = httpSinkConfiguration.getThresholdOptions().getMaximumSize();
         this.maxCollectionDuration = httpSinkConfiguration.getThresholdOptions().getEventCollectTimeOut().getSeconds();
         this.httpPluginSetting = httpPluginSetting;
-		this.oAuthAccessTokenManager = new OAuthAccessTokenManager();
+
+		    this.oAuthAccessTokenManager = new OAuthAccessTokenManager();
 
         if ((!httpSinkConfiguration.isInsecureSkipVerify()) || (httpSinkConfiguration.useAcmCertForSSL())) {
             this.certificateProviderFactory = new CertificateProviderFactory(httpSinkConfiguration);
@@ -146,12 +157,13 @@ public class HttpSinkService {
         }
         else{
             try {
-                this.httpClientConnectionManager = new HttpClientSSLConnectionManager().createHttpClientConnectionManagerWithoutValidation();
+                this.httpClientConnectionManager = new HttpClientSSLConnectionManager().createHttpClientConnectionManagerWithoutValidation(httpSinkConfiguration);
             }catch(NoSuchAlgorithmException | KeyStoreException | KeyManagementException ex){
                 LOG.error("Exception while insecure_skip_verify is true ",ex);
             }
         }
         this.httpAuthOptions = buildAuthHttpSinkObjectsByConfig(httpSinkConfiguration);
+        this.closeableHttpClient = httpAuthOptions.get(httpSinkConfiguration.getUrl()).getHttpClientBuilder().build();
         this.httpSinkRecordsSuccessCounter = pluginMetrics.counter(HTTP_SINK_RECORDS_SUCCESS_COUNTER);
         this.httpSinkRecordsFailedCounter = pluginMetrics.counter(HTTP_SINK_RECORDS_FAILED_COUNTER);
         this.codec= codec;
@@ -195,9 +207,35 @@ public class HttpSinkService {
                 catch (IOException e) {
                     throw new RuntimeException(e);
                 }});
+
+            if(currentBuffer.getEventCount() > 0) {
+              try {
+                codec.complete(outputStream);
+                final HttpEndPointResponse failedHttpEndPointResponses = pushToEndPoint(getCurrentBufferData(currentBuffer));
+                if (failedHttpEndPointResponses != null) {
+                  logFailedData(failedHttpEndPointResponses);
+                  releaseEventHandles(Boolean.FALSE);
+                }
+                else {
+                  LOG.info("data pushed to the end point successfully");
+                  releaseEventHandles(Boolean.TRUE);
+                }
+                currentBuffer = bufferFactory.getBuffer();
+              } catch (IOException e) {
+                throw new RuntimeException(e);
+              }
+            }
         }finally {
             reentrantLock.unlock();
         }
+    }
+
+    public void shutdown() {
+      try {
+        this.closeableHttpClient.close();
+      } catch (final IOException e) {
+        throw new RuntimeException(e.getMessage(), e);
+      }
     }
 
     private byte[] getCurrentBufferData(final Buffer currentBuffer) {
@@ -239,17 +277,24 @@ public class HttpSinkService {
      *  @param currentBufferData bufferData.
      */
     private HttpEndPointResponse pushToEndPoint(final byte[] currentBufferData) {
+        byte[] requestBuffer;
         HttpEndPointResponse httpEndPointResponses = null;
         final ClassicRequestBuilder classicHttpRequestBuilder =
                 httpAuthOptions.get(httpSinkConfiguration.getUrl()).getClassicHttpRequestBuilder();
-        classicHttpRequestBuilder.setEntity(currentBufferData, ContentType.APPLICATION_JSON);
+        if(httpSinkConfiguration.isCompression()) {
+          requestBuffer = compress(currentBufferData);
+          classicHttpRequestBuilder.setHeader(HttpHeaders.CONTENT_ENCODING, "gzip");
+        } else {
+          requestBuffer = currentBufferData;
+        }
+        classicHttpRequestBuilder.setEntity(requestBuffer, ContentType.APPLICATION_JSON);
         try {
            if(AuthTypeOptions.BEARER_TOKEN.equals(httpSinkConfiguration.getAuthType()))
                accessTokenIfExpired(httpSinkConfiguration.getAuthentication().getBearerTokenOptions().getTokenExpired(),httpSinkConfiguration.getUrl());
-            httpAuthOptions.get(httpSinkConfiguration.getUrl()).getHttpClientBuilder().build()
-                    .execute(classicHttpRequestBuilder.build(), HttpClientContext.create());
-            LOG.info("No of Records successfully pushed to endpoint {}", httpSinkConfiguration.getUrl() +" " + currentBuffer.getEventCount());
-            httpSinkRecordsSuccessCounter.increment(currentBuffer.getEventCount());
+           try (CloseableHttpResponse ignored = closeableHttpClient.execute(classicHttpRequestBuilder.build(), HttpClientContext.create())) {
+             LOG.info("No of Records successfully pushed to endpoint {}", httpSinkConfiguration.getUrl() +" " + currentBuffer.getEventCount());
+             httpSinkRecordsSuccessCounter.increment(currentBuffer.getEventCount());
+           }
         } catch (IOException e) {
             httpSinkRecordsFailedCounter.increment(currentBuffer.getEventCount());
             LOG.info("No of Records failed to push endpoint {}",currentBuffer.getEventCount());
@@ -259,12 +304,29 @@ public class HttpSinkService {
         return httpEndPointResponses;
     }
 
+  private byte[] compress(byte[] payload) {
+      try {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(payload.length);
+        GzipCompressorOutputStream gzip = new GzipCompressorOutputStream(bos);
+        gzip.write(payload);
+        gzip.close();
+        byte[] compressed = bos.toByteArray();
+        bos.close();
+        return compressed;
+      } catch (IOException e) {
+        LOG.error("Exception while compressing the request body", e);
+        throw new RuntimeException(e);
+      }
+  }
+
     /**
      * * This method sends Failed objects to DLQ
      *  @param failedDlqData FailedDlqData.
      */
     private void logFailureForDlqObjects(final FailedDlqData failedDlqData){
+      if(dlqPushHandler != null) {
         dlqPushHandler.perform(httpPluginSetting, failedDlqData);
+      }
     }
 
     /**
@@ -287,18 +349,19 @@ public class HttpSinkService {
                 multiAuthHttpSinkHandler = new BasicAuthHttpSinkHandler(
                          httpSinkConfiguration.getAuthentication().getHttpBasic().getUsername(),
                          httpSinkConfiguration.getAuthentication().getHttpBasic().getPassword(),
-                         httpClientConnectionManager);
+                         httpClientConnectionManager,
+                         httpSinkConfiguration.getRetryableCodes());
                 break;
             case BEARER_TOKEN:
                 multiAuthHttpSinkHandler = new BearerTokenAuthHttpSinkHandler(
                         httpSinkConfiguration.getAuthentication().getBearerTokenOptions(),
-                        httpClientConnectionManager, oAuthAccessTokenManager);
+                        httpClientConnectionManager, oAuthAccessTokenManager, httpSinkConfiguration.getRetryableCodes());
                 break;
             case UNAUTHENTICATED:
             default:
                 return authOptions.setHttpClientBuilder(httpClientBuilder
                         .setConnectionManager(httpClientConnectionManager)
-                        .addResponseInterceptorLast(new FailedHttpResponseInterceptor(authOptions.getUrl()))).build();
+                        .addResponseInterceptorLast(new FailedHttpResponseInterceptor(httpSinkConfiguration.getRetryableCodes(), authOptions.getUrl()))).build();
         }
         return multiAuthHttpSinkHandler.authenticate(authOptions);
     }
@@ -328,12 +391,21 @@ public class HttpSinkService {
             httpClientBuilder.setProxy(HttpSinkUtil.getHttpHostByURL(HttpSinkUtil.getURLByUrlString(proxyUrlString)));
             LOG.info("sending data via proxy {}",proxyUrlString);
         }
-        if(httpSinkConfiguration.getRequestTimout() != null) {
-            httpClientBuilder.setDefaultRequestConfig(RequestConfig.custom().setConnectionRequestTimeout(Timeout.ofMilliseconds(httpSinkConfiguration.getRequestTimout().toMillis())).build());
+        if(httpSinkConfiguration.getRequestTimeout() != null) {
+            httpClientBuilder.setDefaultRequestConfig(RequestConfig.custom()
+                .setConnectionRequestTimeout(Timeout.ofMilliseconds(httpSinkConfiguration.getRequestTimeout().toMillis()))
+                .build());
+        }
+
+        if(httpSinkConfiguration.isKeepAlive()) {
+          httpClientBuilder.setConnectionReuseStrategy(DefaultConnectionReuseStrategy.INSTANCE);
+        } else {
+          httpClientBuilder.setConnectionReuseStrategy((ConnectionReuseStrategy) NoConnectionReuseStrategy.INSTANCE);
         }
 
         final HttpAuthOptions.Builder authOptions = new HttpAuthOptions.Builder()
                 .setUrl(httpSinkConfiguration.getUrl())
+                .setWorkers(httpSinkConfiguration.getWorkers())
                 .setClassicHttpRequestBuilder(classicRequestBuilder)
                 .setHttpClientBuilder(httpClientBuilder);
 

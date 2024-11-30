@@ -186,6 +186,7 @@ public class HttpSinkServiceTest {
         verify(httpSinkRecordsFailedCounter).increment(1);
     }
 
+
     @Test
     void http_sink_service_test_with_single_record_with_basic_authentication() throws NoSuchFieldException, IllegalAccessException, JsonProcessingException {
 

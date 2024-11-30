@@ -4,6 +4,7 @@
  */
 package org.opensearch.dataprepper.plugins.sink.http.certificate;
 
+import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.config.TlsConfig;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.client5.http.io.HttpClientConnectionManager;
@@ -11,10 +12,12 @@ import org.apache.hc.client5.http.ssl.NoopHostnameVerifier;
 import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactory;
 import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactoryBuilder;
 import org.apache.hc.client5.http.ssl.TrustAllStrategy;
+import org.apache.hc.core5.http.io.SocketConfig;
 import org.apache.hc.core5.http.ssl.TLS;
 import org.apache.hc.core5.ssl.SSLContextBuilder;
 import org.apache.hc.core5.ssl.SSLContexts;
 import org.apache.hc.core5.ssl.TrustStrategy;
+import org.apache.hc.core5.util.TimeValue;
 import org.apache.hc.core5.util.Timeout;
 import org.opensearch.dataprepper.plugins.sink.http.configuration.HttpSinkConfiguration;
 import org.slf4j.Logger;
@@ -53,7 +56,11 @@ public class HttpClientSSLConnectionManager {
                 .setSslContext(sslContext)
                 .build();
        return PoolingHttpClientConnectionManagerBuilder.create()
-                .setSSLSocketFactory(sslSocketFactory)
+           .setDefaultSocketConfig(SocketConfig.custom().setSoTimeout(Timeout.of(sinkConfiguration.getSocketTimeout())).build())
+           .setDefaultConnectionConfig(ConnectionConfig.custom().setSocketTimeout(Timeout.of(sinkConfiguration.getSocketTimeout())).setConnectTimeout(Timeout.of(sinkConfiguration.getConnectTimeout())).setValidateAfterInactivity(TimeValue.of(sinkConfiguration.getValidateAfterInactivity())).build())
+           .setMaxConnTotal(sinkConfiguration.getPoolMaxConnections())
+           .setMaxConnPerRoute(sinkConfiguration.getPoolMaxPerRoute())
+           .setSSLSocketFactory(sslSocketFactory)
                 .setDefaultTlsConfig(TlsConfig.custom()
                         .setHandshakeTimeout(Timeout.ofSeconds(30))
                         .setSupportedProtocols(TLS.V_1_3)
@@ -86,9 +93,14 @@ public class HttpClientSSLConnectionManager {
         }
     }
 
-    public HttpClientConnectionManager createHttpClientConnectionManagerWithoutValidation()  throws NoSuchAlgorithmException, KeyStoreException, KeyManagementException {
+    public HttpClientConnectionManager createHttpClientConnectionManagerWithoutValidation(HttpSinkConfiguration httpSinkConfiguration)  throws NoSuchAlgorithmException, KeyStoreException, KeyManagementException {
         {
             return PoolingHttpClientConnectionManagerBuilder.create()
+                .setDefaultConnectionConfig(ConnectionConfig.custom().setSocketTimeout(Timeout.of(httpSinkConfiguration.getSocketTimeout())).setConnectTimeout(Timeout.of(httpSinkConfiguration.getConnectTimeout())).setValidateAfterInactivity(TimeValue.of(httpSinkConfiguration.getValidateAfterInactivity())).build())
+                .setMaxConnTotal(httpSinkConfiguration.getPoolMaxConnections())
+                .setMaxConnPerRoute(httpSinkConfiguration.getPoolMaxPerRoute())
+                .setDefaultSocketConfig(SocketConfig.custom().setSoTimeout(Timeout.of(httpSinkConfiguration.getSocketTimeout())).build())
+
                     .setSSLSocketFactory(SSLConnectionSocketFactoryBuilder.create()
                             .setSslContext(SSLContextBuilder.create()
                                     .loadTrustMaterial(TrustAllStrategy.INSTANCE)

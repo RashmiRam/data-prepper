@@ -11,6 +11,8 @@ import org.apache.hc.client5.http.io.HttpClientConnectionManager;
 import org.opensearch.dataprepper.plugins.sink.http.FailedHttpResponseInterceptor;
 import org.opensearch.dataprepper.plugins.sink.http.util.HttpSinkUtil;
 
+import java.util.List;
+
 /**
  * * This class handles Basic Authentication
  */
@@ -21,14 +23,17 @@ public class BasicAuthHttpSinkHandler implements MultiAuthHttpSinkHandler {
     private final String username;
 
     private final String password;
+    private final List<Integer> retryableCodes;
 
-    public BasicAuthHttpSinkHandler(final String username,
+  public BasicAuthHttpSinkHandler(final String username,
                                     final String password,
-                                    final HttpClientConnectionManager httpClientConnectionManager){
+                                    final HttpClientConnectionManager httpClientConnectionManager,
+                                    final List<Integer> retryableCodes){
         this.httpClientConnectionManager = httpClientConnectionManager;
         this.username = username;
         this.password = password;
-    }
+    this.retryableCodes = retryableCodes;
+  }
 
     @Override
     public HttpAuthOptions authenticate(final HttpAuthOptions.Builder  httpAuthOptionsBuilder) {
@@ -37,7 +42,7 @@ public class BasicAuthHttpSinkHandler implements MultiAuthHttpSinkHandler {
         provider.setCredentials(authScope, new UsernamePasswordCredentials(username, password.toCharArray()));
         httpAuthOptionsBuilder.setHttpClientBuilder(httpAuthOptionsBuilder.build().getHttpClientBuilder()
                 .setConnectionManager(httpClientConnectionManager)
-                .addResponseInterceptorLast(new FailedHttpResponseInterceptor(httpAuthOptionsBuilder.getUrl()))
+                .addResponseInterceptorLast(new FailedHttpResponseInterceptor(retryableCodes, httpAuthOptionsBuilder.getUrl()))
                 .setDefaultCredentialsProvider(provider));
         return httpAuthOptionsBuilder.build();
     }

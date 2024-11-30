@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.URL;
+import java.util.List;
 
 public class WebhookService {
 
@@ -42,6 +43,8 @@ public class WebhookService {
 
     private URL url;
 
+    private List<Integer> retryableCodes;
+
     public WebhookService(final String url,
                           final HttpClientBuilder httpClientBuilder,
                           final PluginMetrics pluginMetrics,
@@ -52,6 +55,7 @@ public class WebhookService {
         this.httpSinkWebhookFailedCounter = pluginMetrics.counter(HTTP_SINK_FAILED_WEBHOOKS);
         this.httpRequestRetryStrategy = new DefaultHttpRequestRetryStrategy(httpSinkConfiguration.getMaxUploadRetries(),
                 TimeValue.of(httpSinkConfiguration.getHttpRetryInterval()));
+        this.retryableCodes = httpSinkConfiguration.getRetryableCodes();
     }
 
     /**
@@ -67,7 +71,7 @@ public class WebhookService {
         try {
             webhookResp = httpClientBuilder
                     .setRetryStrategy(new DefaultHttpRequestRetryStrategy())
-                    .addResponseInterceptorLast(new FailedHttpResponseInterceptor(url.toString()))
+                    .addResponseInterceptorLast(new FailedHttpResponseInterceptor(retryableCodes, url.toString()))
                     .build()
                     .execute(targetHost, classicHttpRequestBuilder.build(), HttpClientContext.create());
             httpSinkWebhookSuccessCounter.increment();

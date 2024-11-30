@@ -13,6 +13,8 @@ import org.slf4j.LoggerFactory;
 
 import org.opensearch.dataprepper.plugins.sink.http.FailedHttpResponseInterceptor;
 
+import java.util.List;
+
 /**
  * * This class handles Bearer Token Authentication
  */
@@ -23,6 +25,7 @@ public class BearerTokenAuthHttpSinkHandler implements MultiAuthHttpSinkHandler 
     public static final String AUTHORIZATION = "Authorization";
 
     private final HttpClientConnectionManager httpClientConnectionManager;
+    private final List<Integer> retryableCodes;
 
     private final BearerTokenOptions bearerTokenOptions;
 
@@ -32,9 +35,11 @@ public class BearerTokenAuthHttpSinkHandler implements MultiAuthHttpSinkHandler 
 
     public BearerTokenAuthHttpSinkHandler(final BearerTokenOptions bearerTokenOptions,
                                           final HttpClientConnectionManager httpClientConnectionManager,
-                                          final OAuthAccessTokenManager oAuthRefreshTokenManager){
+                                          final OAuthAccessTokenManager oAuthRefreshTokenManager,
+                                          final List<Integer> retryableCodes){
         this.bearerTokenOptions = bearerTokenOptions;
         this.httpClientConnectionManager = httpClientConnectionManager;
+        this.retryableCodes = retryableCodes;
         this.objectMapper = new ObjectMapper();
         this.oAuthRefreshTokenManager = oAuthRefreshTokenManager;
     }
@@ -45,7 +50,7 @@ public class BearerTokenAuthHttpSinkHandler implements MultiAuthHttpSinkHandler 
                 .addHeader(AUTHORIZATION, oAuthRefreshTokenManager.getAccessToken(bearerTokenOptions));
         httpAuthOptionsBuilder.setHttpClientBuilder(httpAuthOptionsBuilder.build().getHttpClientBuilder()
                 .setConnectionManager(httpClientConnectionManager)
-                .addResponseInterceptorLast(new FailedHttpResponseInterceptor(httpAuthOptionsBuilder.getUrl())));
+                .addResponseInterceptorLast(new FailedHttpResponseInterceptor(retryableCodes, httpAuthOptionsBuilder.getUrl())));
         return httpAuthOptionsBuilder.build();
     }
 }
