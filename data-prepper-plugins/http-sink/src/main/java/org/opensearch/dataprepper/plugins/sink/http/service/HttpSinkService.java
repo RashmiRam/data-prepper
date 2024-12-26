@@ -175,23 +175,7 @@ public class HttpSinkService {
                     bufferedEventHandles.add(event.getEventHandle());
                     if (ThresholdValidator.checkThresholdExceed(currentBuffer, maxEvents, maxBytes, maxCollectionDuration)) {
                         codec.complete(outputStream);
-                        int attempt = 1;
-                        HttpEndPointResponse failedHttpEndPointResponses;
-                        do {
-                            failedHttpEndPointResponses = pushToEndPoint(getCurrentBufferData(currentBuffer), attempt);
-                            if (failedHttpEndPointResponses != null) {
-                                logFailedData(failedHttpEndPointResponses);
-                                final long delayMillis = backoff.nextDelayMillis(attempt++);
-                                // Wait for backOff duration
-                                try {
-                                    Thread.sleep(delayMillis);
-                                    LOG.info("Retrying after {}. Attempt: {}", delayMillis, attempt);
-                                } catch (final InterruptedException e){
-                                    LOG.error("Thread is interrupted while attempting to write to http sink with retry.", e);
-                                }
-                            }
-                        } while (failedHttpEndPointResponses != null);
-
+                        handleRetries(backoff);
                         releaseEventHandles(Boolean.TRUE);
                         currentBuffer = bufferFactory.getBuffer();
                     }
@@ -204,14 +188,8 @@ public class HttpSinkService {
             if (currentBuffer.getEventCount() > 0) {
                 try {
                     codec.complete(outputStream);
-                    final HttpEndPointResponse failedHttpEndPointResponses = pushToEndPoint(getCurrentBufferData(currentBuffer));
-                    if (failedHttpEndPointResponses != null) {
-                        logFailedData(failedHttpEndPointResponses);
-                        releaseEventHandles(Boolean.FALSE);
-                    }
-                    else {
-                        releaseEventHandles(Boolean.TRUE);
-                    }
+                    handleRetries(backoff);
+                    releaseEventHandles(Boolean.TRUE);
                     currentBuffer = bufferFactory.getBuffer();
                 }
                 catch (IOException e) {
@@ -222,6 +200,25 @@ public class HttpSinkService {
         finally {
             reentrantLock.unlock();
         }
+    }
+
+    private void handleRetries(Backoff backoff) {
+        int attempt = 1;
+        HttpEndPointResponse failedHttpEndPointResponses;
+        do {
+            failedHttpEndPointResponses = pushToEndPoint(getCurrentBufferData(currentBuffer), attempt);
+            if (failedHttpEndPointResponses != null) {
+                logFailedData(failedHttpEndPointResponses);
+                final long delayMillis = backoff.nextDelayMillis(attempt++);
+                // Wait for backOff duration
+                try {
+                    Thread.sleep(delayMillis);
+                    LOG.info("Retrying after {}. Attempt: {}", delayMillis, attempt);
+                } catch (final InterruptedException e){
+                    LOG.error("Thread is interrupted while attempting to write to http sink with retry.", e);
+                }
+            }
+        } while (failedHttpEndPointResponses != null);
     }
 
     public void shutdown() {
