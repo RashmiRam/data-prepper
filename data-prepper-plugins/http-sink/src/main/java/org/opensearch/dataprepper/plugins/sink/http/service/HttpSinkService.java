@@ -4,6 +4,7 @@
  */
 package org.opensearch.dataprepper.plugins.sink.http.service;
 
+import com.linecorp.armeria.client.retry.Backoff;
 import io.micrometer.core.instrument.Counter;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.apache.hc.client5.http.config.RequestConfig;
@@ -55,6 +56,7 @@ import java.io.OutputStream;
 import java.security.KeyManagementException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedList;
@@ -71,6 +73,9 @@ public class HttpSinkService {
 
     public static final String HTTP_SINK_RECORDS_SUCCESS_COUNTER = "httpSinkRecordsSuccessPushToEndPoint";
     public static final String HTTP_SINK_RECORDS_FAILED_COUNTER = "httpSinkRecordsFailedToPushEndPoint";
+    public static final long INITIAL_DELAY_MS = 50;
+    public static final long MAXIMUM_DELAY_MS = Duration.ofMinutes(1).toMillis();
+    public static final int MAX_RETRIES = Integer.MAX_VALUE;
     private static final Logger LOG = LoggerFactory.getLogger(HttpSinkService.class);
     private final Collection<EventHandle> bufferedEventHandles;
 
@@ -152,6 +157,7 @@ public class HttpSinkService {
      */
     public void output(Collection<Record<Event>> records) {
         reentrantLock.lock();
+        final Backoff backoff = Backoff.exponential(INITIAL_DELAY_MS, MAXIMUM_DELAY_MS).withMaxAttempts(MAX_RETRIES);
         if (currentBuffer == null) {
             this.currentBuffer = bufferFactory.getBuffer();
         }
@@ -166,18 +172,27 @@ public class HttpSinkService {
                     codec.writeEvent(event, outputStream);
                     int count = currentBuffer.getEventCount() + 1;
                     currentBuffer.setEventCount(count);
-
                     bufferedEventHandles.add(event.getEventHandle());
                     if (ThresholdValidator.checkThresholdExceed(currentBuffer, maxEvents, maxBytes, maxCollectionDuration)) {
                         codec.complete(outputStream);
-                        final HttpEndPointResponse failedHttpEndPointResponses = pushToEndPoint(getCurrentBufferData(currentBuffer));
-                        if (failedHttpEndPointResponses != null) {
-                            logFailedData(failedHttpEndPointResponses);
-                            releaseEventHandles(Boolean.FALSE);
-                        }
-                        else {
-                            releaseEventHandles(Boolean.TRUE);
-                        }
+                        int attempt = 1;
+                        HttpEndPointResponse failedHttpEndPointResponses;
+                        do {
+                            failedHttpEndPointResponses = pushToEndPoint(getCurrentBufferData(currentBuffer), attempt);
+                            if (failedHttpEndPointResponses != null) {
+                                logFailedData(failedHttpEndPointResponses);
+                                final long delayMillis = backoff.nextDelayMillis(attempt++);
+                                // Wait for backOff duration
+                                try {
+                                    Thread.sleep(delayMillis);
+                                    LOG.info("Retrying after {}. Attempt: {}", delayMillis, attempt);
+                                } catch (final InterruptedException e){
+                                    LOG.error("Thread is interrupted while attempting to write to http sink with retry.", e);
+                                }
+                            }
+                        } while (failedHttpEndPointResponses != null);
+
+                        releaseEventHandles(Boolean.TRUE);
                         currentBuffer = bufferFactory.getBuffer();
                     }
                 }
@@ -261,7 +276,7 @@ public class HttpSinkService {
      *
      * @param currentBufferData bufferData.
      */
-    private HttpEndPointResponse pushToEndPoint(final byte[] currentBufferData) {
+    private HttpEndPointResponse pushToEndPoint(final byte[] currentBufferData, int attempt) {
         byte[] requestBuffer;
         HttpEndPointResponse httpEndPointResponses = null;
         final ClassicRequestBuilder classicHttpRequestBuilder =
@@ -281,6 +296,9 @@ public class HttpSinkService {
             try (CloseableHttpResponse ignored = closeableHttpClient.execute(classicHttpRequestBuilder.build(), HttpClientContext.create())) {
 //             LOG.info("No of Records successfully pushed to endpoint {}", httpSinkConfiguration.getUrl() +" " + currentBuffer.getEventCount());
                 httpSinkRecordsSuccessCounter.increment(currentBuffer.getEventCount());
+                if (attempt > 1) {
+                  LOG.info("No of Records successfully pushed to endpoint {} after the retrying for {}th time", httpSinkConfiguration.getUrl() +" " + currentBuffer.getEventCount(), attempt);
+                }
             }
         }
         catch (IOException e) {
