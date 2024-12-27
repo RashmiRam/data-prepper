@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class InMemoryBuffer implements Buffer {
 
-    private static final ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+    private final ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
     private int eventCount;
     private final StopWatch watch;
 
