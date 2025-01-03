@@ -24,7 +24,7 @@ public class ThresholdValidator {
      * @param maxCollectionDuration maximum event collection duration provided by user as threshold.
      * @return boolean value whether the threshold are met.
      */
-    public static boolean checkThresholdExceed(final Buffer currentBuffer, final int maxEvents, final ByteCount maxBytes, final long maxCollectionDuration) {
+    public static boolean checkThresholdExceed(Buffer currentBuffer, final int maxEvents, final ByteCount maxBytes, final long maxCollectionDuration) {
         if (maxEvents > 0) {
             return currentBuffer.getEventCount() + 1 > maxEvents ||
                     currentBuffer.getDuration() > maxCollectionDuration ||

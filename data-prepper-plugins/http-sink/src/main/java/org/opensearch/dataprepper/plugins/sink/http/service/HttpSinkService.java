@@ -100,7 +100,6 @@ public class HttpSinkService {
     private CertificateProviderFactory certificateProviderFactory;
     private WebhookService webhookService;
     private HttpClientConnectionManager httpClientConnectionManager;
-    private Buffer currentBuffer;
     private MultiAuthHttpSinkHandler multiAuthHttpSinkHandler;
 
     public HttpSinkService(final HttpSinkConfiguration httpSinkConfiguration,
@@ -158,12 +157,10 @@ public class HttpSinkService {
     public void output(Collection<Record<Event>> records) {
         reentrantLock.lock();
         final Backoff backoff = Backoff.exponential(INITIAL_DELAY_MS, MAXIMUM_DELAY_MS).withMaxAttempts(MAX_RETRIES);
-        if (currentBuffer == null) {
-            this.currentBuffer = bufferFactory.getBuffer();
-        }
+        Buffer currentBuffer = bufferFactory.getBuffer();
         try {
             OutputStream outputStream = currentBuffer.getOutputStream();
-            records.forEach(record -> {
+            for (Record<Event> record : records) {
                 try {
                     final Event event = record.getData();
                     if (currentBuffer.getEventCount() == 0) {
@@ -175,22 +172,22 @@ public class HttpSinkService {
                     bufferedEventHandles.add(event.getEventHandle());
                     if (ThresholdValidator.checkThresholdExceed(currentBuffer, maxEvents, maxBytes, maxCollectionDuration)) {
                         codec.complete(outputStream);
-                        handleRetries(backoff);
+                        handleRetries(currentBuffer, backoff);
                         releaseEventHandles(Boolean.TRUE);
                         currentBuffer = bufferFactory.getBuffer();
+                        outputStream = currentBuffer.getOutputStream();
                     }
                 }
                 catch (IOException e) {
                     throw new RuntimeException(e);
                 }
-            });
+            }
 
             if (currentBuffer.getEventCount() > 0) {
                 try {
                     codec.complete(outputStream);
-                    handleRetries(backoff);
+                    handleRetries(currentBuffer, backoff);
                     releaseEventHandles(Boolean.TRUE);
-                    currentBuffer = bufferFactory.getBuffer();
                 }
                 catch (IOException e) {
                     throw new RuntimeException(e);
@@ -202,11 +199,11 @@ public class HttpSinkService {
         }
     }
 
-    private void handleRetries(Backoff backoff) {
+    private void handleRetries(Buffer currentBuffer, Backoff backoff) {
         int attempt = 1;
         HttpEndPointResponse failedHttpEndPointResponses;
         do {
-            failedHttpEndPointResponses = pushToEndPoint(getCurrentBufferData(currentBuffer), attempt);
+            failedHttpEndPointResponses = pushToEndPoint(currentBuffer, attempt);
             if (failedHttpEndPointResponses != null) {
                 logFailedData(failedHttpEndPointResponses);
                 final long delayMillis = backoff.nextDelayMillis(attempt++);
@@ -230,7 +227,7 @@ public class HttpSinkService {
         }
     }
 
-    private byte[] getCurrentBufferData(final Buffer currentBuffer) {
+    private byte[] getCurrentBufferData(Buffer currentBuffer) {
         try {
             return currentBuffer.getSinkBufferData();
         }
@@ -244,7 +241,7 @@ public class HttpSinkService {
      *
      * @param endPointResponses HttpEndPointResponses.
      */
-    private void logFailedData(final HttpEndPointResponse endPointResponses) {
+    private void logFailedData(HttpEndPointResponse endPointResponses) {
         FailedDlqData failedDlqData =
             FailedDlqData.builder()
                 .withUrl(endPointResponses.getUrl())
@@ -261,7 +258,7 @@ public class HttpSinkService {
         }
     }
 
-    private void releaseEventHandles(final boolean result) {
+    private void releaseEventHandles(boolean result) {
         for (EventHandle eventHandle : bufferedEventHandles) {
             eventHandle.release(result);
         }
@@ -271,9 +268,10 @@ public class HttpSinkService {
     /**
      * * This method pushes bufferData to configured HttpEndPoints
      *
-     * @param currentBufferData bufferData.
+     * @param currentBuffer.
      */
-    private HttpEndPointResponse pushToEndPoint(final byte[] currentBufferData, int attempt) {
+    private HttpEndPointResponse pushToEndPoint(Buffer currentBuffer, int attempt) {
+        byte[] currentBufferData = getCurrentBufferData(currentBuffer);
         byte[] requestBuffer;
         HttpEndPointResponse httpEndPointResponses = null;
         final ClassicRequestBuilder classicHttpRequestBuilder =

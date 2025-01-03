@@ -29,6 +29,7 @@ MIN_REQ_OPENJDK_VERSION=11
 DATA_PREPPER_BIN=$(dirname "$(readlink -f "$0")")
 DATA_PREPPER_HOME=`readlink -f "$DATA_PREPPER_BIN/.."`
 DATA_PREPPER_CLASSPATH="$DATA_PREPPER_HOME/lib/*"
+DATA_PREPPER_PROFILE_JAVA_AGENT="$DATA_PREPPER_HOME/pyroscope.jar"
 
 #check if java is installed
 if type -p java; then
@@ -63,8 +64,11 @@ fi
 
 DATA_PREPPER_HOME_OPTS="-Ddata-prepper.dir=$DATA_PREPPER_HOME"
 DATA_PREPPER_JAVA_OPTS="-Dlog4j.configurationFile=$DATA_PREPPER_HOME/config/log4j2-rolling.properties"
-
+if [[ -e DATA_PREPPER_PROFILE_JAVA_AGENT ]]; then
+  DATA_PREPPER_JAVA_OPTS="$DATA_PREPPER_JAVA_OPTS -javaagent:$DATA_PREPPER_PROFILE_JAVA_AGENT"
+fi
 if [[ $# == 0 ]]; then
+
     exec java $DATA_PREPPER_JAVA_OPTS $JAVA_OPTS $DATA_PREPPER_HOME_OPTS -cp "$DATA_PREPPER_CLASSPATH" org.opensearch.dataprepper.DataPrepperExecute
 else
     PIPELINES_FILE_LOCATION=$1
