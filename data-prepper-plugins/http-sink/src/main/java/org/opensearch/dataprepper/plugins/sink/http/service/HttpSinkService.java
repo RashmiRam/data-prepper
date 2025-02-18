@@ -50,6 +50,7 @@ import org.opensearch.dataprepper.plugins.sink.http.util.HttpSinkUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -308,9 +309,9 @@ public class HttpSinkService {
     private byte[] compress(byte[] payload) {
         try {
             ByteArrayOutputStream bos = new ByteArrayOutputStream(payload.length);
-            GzipCompressorOutputStream gzip = new GzipCompressorOutputStream(bos);
-            gzip.write(payload);
-            gzip.close();
+            BufferedOutputStream bufferedOutputStream = new BufferedOutputStream(new GzipCompressorOutputStream(bos));
+            bufferedOutputStream.write(payload);
+            bufferedOutputStream.close();
             byte[] compressed = bos.toByteArray();
             bos.close();
             return compressed;
